@@ -1,70 +1,70 @@
 from src.preprocessor import CoqPreprocessor
 from src.ngram_model import NgramModel
 from src.neural_model import NeuralFormatter
-import random
-from typing import List, Tuple
+from src.utils import FormatUtils, ModelUtils, DatasetStats
+import tensorflow as tf
+import argparse
+import os
 
-def load_sample_data() -> str:
-    """Load sample Coq code."""
-    return """
-    Proof.
-      move=> x y.
-      exists z.
-      forall w, P w -> Q w.
-    Qed.
-    """
-
-def split_data(data: List[Tuple[List[str], str]], 
-               train_ratio: float = 0.8) -> Tuple[List, List]:
-    """Split data into training and test sets."""
-    random.shuffle(data)
-    split_idx = int(len(data) * train_ratio)
-    return data[:split_idx], data[split_idx:]
-
-def evaluate_model(model, test_data: List[Tuple[List[str], str]]) -> dict:
-    """Evaluate model performance."""
-    top1_correct = 0
-    top3_correct = 0
-    total = 0
-    
-    for context, true_spacing in test_data:
-        predictions = model.predict(context, k=3)
-        predicted_spacings = [p[0] for p in predictions]
-        
-        if predicted_spacings[0] == true_spacing:
-            top1_correct += 1
-        if true_spacing in predicted_spacings:
-            top3_correct += 1
-        total += 1
-    
-    return {
-        'top1_accuracy': top1_correct / total,
-        'top3_accuracy': top3_correct / total
-    }
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train Coq formatting models')
+    parser.add_argument('--input', type=str, default='data/sample_input/simple.v',
+                      help='Input Coq file for training')
+    parser.add_argument('--epochs', type=int, default=80,
+                      help='Number of epochs for neural model training')
+    parser.add_argument('--batch-size', type=int, default=32,
+                      help='Batch size for neural model training')
+    parser.add_argument('--output-dir', type=str, default='models',
+                      help='Directory to save trained models')
+    return parser.parse_args()
 
 def main():
+    args = parse_args()
+    
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
+    
     # Load and preprocess data
     preprocessor = CoqPreprocessor()
-    sample_code = load_sample_data()
+    sample_code = FormatUtils.load_coq_file(args.input)
     tokens = preprocessor.tokenize(sample_code)
-    data = preprocessor.prepare_training_data(tokens)
     
-    # Split data
-    train_data, test_data = split_data(data)
+    # Calculate and display dataset statistics
+    stats = DatasetStats.get_token_statistics(tokens)
+    DatasetStats.print_dataset_info(stats)
+    
+    # Prepare training data
+    data = preprocessor.prepare_training_data(tokens)
+    train_data, test_data = ModelUtils.split_data(data, train_ratio=0.8)
     
     # Train and evaluate n-gram model
     print("\nTraining N-gram model...")
     ngram_model = NgramModel(n=3)
     ngram_model.fit([context for context, _ in train_data])
-    ngram_results = evaluate_model(ngram_model, test_data)
+    ngram_results = ModelUtils.evaluate_model(ngram_model, test_data)
     print(f"N-gram model results: {ngram_results}")
+    
+    # Save n-gram results
+    ModelUtils.save_model_metrics(ngram_results, 'ngram', args.output_dir)
     
     # Train and evaluate neural model
     print("\nTraining Neural model...")
     neural_model = NeuralFormatter()
-    neural_model.fit(train_data, epochs=20)
-    neural_results = evaluate_model(neural_model, test_data)
+    history = neural_model.fit(train_data, 
+                             epochs=args.epochs,
+                             batch_size=args.batch_size)
+    
+    # Evaluate neural model
+    neural_results = ModelUtils.evaluate_model(neural_model, test_data)
     print(f"Neural model results: {neural_results}")
+    
+    # Save neural model and results
+    neural_model.save(os.path.join(args.output_dir, "neural_formatter"))
+    ModelUtils.save_model_metrics(neural_results, 'neural', args.output_dir)
+    
+    # Save training history
+    history_dict = history.history
+    ModelUtils.save_model_metrics(history_dict, 'neural_history', args.output_dir)
 
 if __name__ == "__main__":
     main()
